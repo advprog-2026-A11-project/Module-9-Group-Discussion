@@ -10,10 +10,10 @@ YOMU adalah platform pembelajaran membaca berbasis web. Secara arsitektur, YOMU 
 | ---------------- | --------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `frontend`       | Next.js, React, TypeScript                          | UI web untuk admin dan student, routing halaman, session cookie, dan sebagian proxy request backend. |
 | `be-auth`        | Spring Boot, Supabase Auth, PostgreSQL/Supabase DB  | Login, register, refresh token, logout, profil user, role admin/student, dan validasi identitas.     |
-| `be-bacaan`      | Spring Boot, PostgreSQL                             | Bacaan, quiz, progress membaca, submit quiz, dan integrasi event quiz selesai ke achievement.        |
+| `be-bacaan`      | Spring Boot, PostgreSQL, Supabase JWT config        | Bacaan, quiz, progress membaca, submit quiz, dan integrasi event quiz selesai ke achievement.        |
 | `be-forum`       | Spring Boot, PostgreSQL, Supabase JWT/JWKS          | Forum message, reply, reaction, dan validasi write operation dengan token Supabase.                  |
 | `be-liga`        | Spring Boot, Supabase JWT/JWKS, Supabase PostgreSQL | Clan/liga, member, application, join/quit clan, dan validasi user berbasis token Supabase.           |
-| `be-achievement` | Spring Boot, PostgreSQL                             | Achievement, daily mission, student progress, featured achievement, dan event `quiz-completed`.      |
+| `be-achievement` | Spring Boot, PostgreSQL, Auth service validation    | Achievement, daily mission, student progress, featured achievement, dan event `quiz-completed`.      |
 | Supabase Auth    | External service                                    | Identity provider, JWT issuer, JWKS provider, dan integrasi Google SSO.                              |
 | Google OAuth     | External service                                    | Provider login Google yang digunakan melalui Supabase.                                               |
 
@@ -96,7 +96,9 @@ Relasi yang paling penting secara arsitektural:
 - `Single Page Application -> Liga`: dipakai untuk fitur clan/liga.
 - `Single Page Application -> Achievements`: dipakai untuk melihat dan mengelola achievement.
 - `Bacaan -> Achievements`: dipakai untuk mengirim event ketika quiz selesai agar achievement student dapat diperbarui.
-- `Forum`, `Liga`, `Bacaan`, dan `Achievements -> Authentication Database/Supabase JWKS`: dipakai untuk validasi JWT atau identitas user. Khusus `be-liga`, dependency ke Supabase penting karena service ini memakai issuer/JWKS Supabase untuk resource server security.
+- `Forum` dan `Liga -> Supabase Auth/JWKS`: dipakai untuk validasi JWT dari Supabase. Khusus `be-liga`, dependency ini penting karena service memakai `AUTH_SUPABASE_URL` sebagai issuer JWT.
+- `Bacaan -> Supabase JWT/JWKS config`: service bacaan memiliki konfigurasi Supabase JWT/JWKS, walaupun enforcement security perlu dilihat dari implementasi filter dan endpoint.
+- `Achievements -> Authentication`: `be-achievement` memvalidasi token dengan memanggil `be-auth` melalui `AUTH_SERVICE_URL`, sehingga availability auth service ikut memengaruhi endpoint achievement yang protected.
 
 ### Analisis Arsitektural dari Container Diagram
 
@@ -115,16 +117,140 @@ Namun, container diagram juga memperlihatkan titik integrasi yang perlu dijaga:
 
 ### Penjelasan Deployment Diagram
 
-Deployment diagram menunjukkan bahwa frontend dan backend tidak berjalan di tempat yang sama. Frontend ditempatkan sebagai aplikasi Next.js pada Vercel, sedangkan backend service berjalan pada node AWS EC2 Ubuntu Server. Database sebagian berjalan di EC2 PostgreSQL dan sebagian memakai Supabase PostgreSQL.
+Deployment diagram menunjukkan bahwa frontend, backend, dan database tidak semuanya berada di satu tempat. Frontend ditempatkan sebagai aplikasi Next.js di Vercel. Backend service berjalan sebagai aplikasi Spring Boot pada AWS EC2 Ubuntu Server. Database dipisahkan berdasarkan service: `be-auth` dan `be-liga` memakai PostgreSQL yang diakses melalui Supabase pooler, sedangkan `be-forum` dan `be-achievement` memiliki konfigurasi docker-compose dengan PostgreSQL container sendiri. `be-bacaan` memakai PostgreSQL biasa dengan konfigurasi default `jdbc:postgresql://localhost:5432/yomu_db`, yang pada deployment diagram direpresentasikan sebagai database terpisah untuk service bacaan.
 
-| Deployment Node       | Container                                  | Analisis                                                                                                                                                                           |
-| --------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Vercel                | Single Page Application / Next.js frontend | Vercel menjadi tempat deployment frontend. User mengakses frontend melalui browser, kemudian frontend melakukan request API ke backend service.                                    |
-| AWS EC2 Ubuntu Server | Authentication                             | `be-auth` berjalan sebagai Spring Boot service. Service ini berinteraksi dengan Supabase untuk auth/JWT dan dengan database auth.                                                  |
-| AWS EC2 Ubuntu Server | Bacaan                                     | `be-bacaan` berjalan sebagai Spring Boot service untuk fitur bacaan dan quiz. Service ini membaca/menulis ke Bacaan Database.                                                      |
-| AWS EC2 Ubuntu Server | Forum                                      | `be-forum` berjalan sebagai Spring Boot service untuk fitur forum. Service ini membaca/menulis ke Forum Database dan memvalidasi JWT dari Supabase.                                |
-| AWS EC2 Ubuntu Server | Liga                                       | `be-liga` berjalan sebagai Spring Boot service untuk fitur clan/liga. Service ini memakai Supabase untuk JWT/JWKS dan database liga pada deployment diagram.                       |
-| AWS EC2 Ubuntu Server | Achievements                               | `be-achievement` berjalan sebagai Spring Boot service untuk fitur achievement. Service ini membaca/menulis ke Achievements Database dan menerima event dari Bacaan.                |
-| Supabase              | Authentication Database                    | Database auth ditempatkan di Supabase. Ini sejalan dengan penggunaan Supabase sebagai pusat identitas/auth.                                                                        |
-| Supabase              | Liga Database                              | Database liga ditempatkan di Supabase. Ini penting karena `be-liga` bukan hanya memakai Spring Boot, tetapi juga bergantung pada Supabase pada sisi auth/JWT dan penyimpanan data. |
-| AWS EC2 Ubuntu Server | Bacaan, Forum, dan Achievements Database   | Database domain bacaan, forum, dan achievement ditempatkan sebagai PostgreSQL pada node EC2 sesuai diagram.                                                                        |
+| Deployment Node          | Container                                  | Analisis                                                                                                                                                                                                                                                            |
+| ------------------------ | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Vercel                   | Single Page Application / Next.js frontend | Vercel menjadi tempat deployment frontend. User mengakses frontend melalui browser, kemudian frontend melakukan request API ke backend service.                                                                                                                     |
+| AWS EC2 Ubuntu Server    | Authentication service (`be-auth`)         | `be-auth` berjalan sebagai Spring Boot service. Service ini terhubung ke Supabase untuk auth/JWT dan menggunakan datasource PostgreSQL dari Supabase Session Pooler melalui `JDBC_DATABASE_URL` atau komponen `DB_HOST`, `DB_USER`, dan `DB_PASSWORD`.              |
+| AWS EC2 Ubuntu Server    | Bacaan service (`be-bacaan`)               | `be-bacaan` berjalan sebagai Spring Boot service untuk bacaan dan quiz. Konfigurasi datasource default mengarah ke PostgreSQL `yomu_db`; service ini juga memiliki konfigurasi Supabase JWT/JWKS dan memanggil `be-achievement` ketika quiz selesai.                |
+| AWS EC2 Ubuntu Server    | Forum service (`be-forum`)                 | `be-forum` berjalan sebagai Spring Boot service untuk forum. Database forum berasal dari `DB_URL`; pada docker-compose service ini menjalankan PostgreSQL container `db` sendiri, sementara Supabase dipakai untuk validasi JWT/JWKS, bukan sebagai database forum. |
+| AWS EC2 Ubuntu Server    | Liga service (`be-liga`)                   | `be-liga` berjalan sebagai Spring Boot service untuk fitur clan/liga. `.env.example` menunjukkan `DB_URL` memakai Supabase pooler dan `AUTH_SUPABASE_URL` dipakai sebagai issuer JWT, sehingga liga memakai Supabase untuk database sekaligus autentikasi/JWKS.     |
+| AWS EC2 Ubuntu Server    | Achievements service (`be-achievement`)    | `be-achievement` berjalan sebagai Spring Boot service untuk achievement dan daily mission. Docker-compose menyediakan PostgreSQL container sendiri, dan service ini memakai `AUTH_SERVICE_URL` untuk validasi token melalui `be-auth`.                              |
+| Supabase                 | Authentication Database                    | Database auth ditempatkan di Supabase PostgreSQL. Ini sesuai dengan konfigurasi `be-auth` yang memprioritaskan `JDBC_DATABASE_URL` dari Supabase Session Pooler.                                                                                                    |
+| Supabase                 | Liga Database                              | Database liga ditempatkan di Supabase PostgreSQL. Ini sesuai dengan `be-liga/.env.example` yang memakai host pooler Supabase pada `DB_URL`.                                                                                                                         |
+| AWS EC2 / Docker network | Bacaan Database                            | Database bacaan adalah PostgreSQL domain bacaan. Dari konfigurasi service, default-nya adalah `jdbc:postgresql://localhost:5432/yomu_db`; pada deployment, database ini diperlakukan sebagai database terpisah dari Supabase auth/liga.                             |
+| AWS EC2 / Docker network | Forum Database                             | Database forum adalah PostgreSQL container `db` dari `be-forum/docker-compose.yml`. Ia menyimpan data message, reply, dan reaction.                                                                                                                                 |
+| AWS EC2 / Docker network | Achievements Database                      | Database achievement adalah PostgreSQL container dari `be-achievement/docker-compose.yml` atau datasource yang diberikan lewat `SPRING_DATASOURCE_URL`. Ia menyimpan achievement, daily mission, dan progress achievement.                                          |
+
+## 5. Risk Analysis and Risk Storming
+
+Risk storming digunakan karena arsitektur YOMU sudah cukup modular: ada frontend, beberapa backend service, beberapa database, Supabase Auth/JWKS, Google OAuth, dan komunikasi antarservice. Ketika YOMU diasumsikan sukses dan jumlah student meningkat, risiko terbesar bukan lagi sekadar apakah tiap service bisa berjalan, tetapi apakah semua integrasi antarservice tetap aman, konsisten, dan tahan gagal.
+
+Risk matrix yang digunakan:
+
+| Impact x Likelihood | Low likelihood (1) | Medium likelihood (2) | High likelihood (3) |
+| ------------------- | -----------------: | --------------------: | ------------------: |
+| Low impact (1)      |              1 Low |                 2 Low |            3 Medium |
+| Medium impact (2)   |              2 Low |              4 Medium |              6 High |
+| High impact (3)     |           3 Medium |                6 High |              9 High |
+
+| Area           | Risiko                                                                         | Impact | Likelihood | Nilai | Level  | Analisis                                                                                                                                |
+| -------------- | ------------------------------------------------------------------------------ | -----: | ---------: | ----: | ------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Availability   | Frontend masih punya pola akses backend yang tidak seragam                     |      3 |          2 |     6 | High   | Jika frontend production masih mengarah ke URL service yang salah atau hardcoded, fitur bacaan/clan dapat gagal meskipun backend hidup. |
+| Availability   | Banyak service menjadi dependency user journey                                 |      3 |          2 |     6 | High   | Student flow menyentuh auth, bacaan, forum, liga, dan achievement. Kegagalan satu service dapat merusak pengalaman belajar.             |
+| Data Integrity | Event quiz selesai dari `be-bacaan` ke `be-achievement` masih synchronous HTTP |      3 |          2 |     6 | High   | Quiz bisa berhasil tersimpan, tetapi achievement gagal diperbarui jika service achievement down atau lambat.                            |
+| Security       | Validasi JWT dan role tersebar di beberapa service                             |      3 |          2 |     6 | High   | Salah konfigurasi issuer, JWKS, atau role dapat membuat endpoint admin terlalu terbuka atau user valid ditolak.                         |
+| Scalability    | Request antarservice masih banyak berupa request-response langsung             |      2 |          2 |     4 | Medium | Saat traffic naik, latency antarservice bisa meningkat dan memicu cascading failure.                                                    |
+| Deployment     | Konfigurasi env, database, dan port berbeda antarservice                       |      2 |          2 |     4 | Medium | Deployment menjadi rawan salah konfigurasi karena auth, liga, forum, bacaan, dan achievement punya pola database yang berbeda.          |
+| Observability  | Belum ada komponen monitoring/logging eksplisit pada arsitektur                |      2 |          2 |     4 | Medium | Saat sistem ramai, tim sulit mengetahui service mana yang lambat, error, atau gagal tanpa monitoring yang jelas.                        |
+
+Hasil risk storming menunjukkan bahwa mitigasi paling penting adalah membuat akses backend lebih konsisten, memisahkan event yang tidak perlu synchronous, memperkuat validasi auth/role, dan menambahkan observability. Perubahan ini tidak harus menghapus arsitektur microservice yang sudah ada; justru memperkuatnya agar lebih siap untuk skala yang lebih besar.
+
+## 6. The Future Architecture of the Group
+
+Future architecture YOMU dibuat berdasarkan risiko yang ditemukan pada risk storming. Asumsinya, YOMU berhasil digunakan oleh banyak student, forum mulai aktif, quiz sering dikerjakan, dan achievement menjadi bagian penting dari retention. Dalam kondisi ini, arsitektur perlu tetap sederhana, tetapi lebih tahan terhadap traffic tinggi dan kegagalan parsial.
+
+Perubahan utama yang diusulkan:
+
+- Semua request dari frontend masuk melalui **API Gateway / BFF** agar routing, auth forwarding, CORS, dan backend URL lebih konsisten (Mungkin bisa diselesaikan ehe?)
+- Event `QuizCompleted` dari Bacaan ke Achievement dipindah ke **Event Queue** agar submit quiz tidak gagal hanya karena achievement service sedang lambat.
+- Validasi identity tetap memakai Supabase/JWKS, tetapi akses admin dan protected endpoint perlu distandarkan antarservice.
+- Monitoring dan logging ditambahkan sebagai external supporting system agar failure dapat ditemukan lebih cepat.
+- Database tetap dipisah per domain agar ownership data tetap jelas.
+
+### Future Context Diagram
+
+```mermaid
+flowchart LR
+  Student[Student]
+  Admin[Admin]
+  Supabase[Supabase Auth]
+  Google[Google OAuth]
+  Observability[Monitoring and Logging Platform]
+
+  YOMU["YOMU Learning Platform\nFuture Architecture"]
+
+  Student -->|"learns, quizzes, joins forum/clan, tracks achievements"| YOMU
+  Admin -->|"manages content, users, quizzes, and achievements"| YOMU
+  YOMU -->|"authentication, JWT, JWKS, identity"| Supabase
+  YOMU -->|"Google sign-in via Supabase"| Google
+  YOMU -->|"health metrics, logs, alerts"| Observability
+  Google -.->|"OAuth provider"| Supabase
+```
+
+Pada context level, aktor utama tetap sama: student dan admin. Perubahan pentingnya adalah sistem masa depan menambahkan monitoring/logging sebagai external supporting system. Saat YOMU semakin besar, observability dibutuhkan agar tim dapat melihat service yang lambat, gagal, atau mengalami error sebelum berdampak luas ke pengguna.
+
+### Future Container Diagram
+
+```mermaid
+flowchart TB
+  Student[Student]
+  Admin[Admin]
+
+  subgraph YOMU["YOMU Learning Platform"]
+    FE["Single Page Application\nNext.js"]
+    BFF["API Gateway / BFF\nCentral backend entry point"]
+    Auth["Authentication Service\nSpring Boot + Supabase Auth"]
+    Bacaan["Bacaan Service\nReading and Quiz"]
+    Forum["Forum Service\nMessage, Reply, Reaction"]
+    Liga["Liga Service\nClan and Members"]
+    Achievement["Achievement Service\nAchievement and Daily Mission"]
+    Queue["Event Queue\nQuizCompleted events"]
+
+    AuthDb[("Auth DB\nSupabase PostgreSQL")]
+    BacaanDb[("Bacaan DB\nPostgreSQL")]
+    ForumDb[("Forum DB\nPostgreSQL")]
+    LigaDb[("Liga DB\nSupabase PostgreSQL")]
+    AchievementDb[("Achievement DB\nPostgreSQL")]
+  end
+
+  Supabase["Supabase Auth / JWKS"]
+  Monitor["Monitoring and Logging"]
+
+  Student --> FE
+  Admin --> FE
+  FE --> BFF
+
+  BFF --> Auth
+  BFF --> Bacaan
+  BFF --> Forum
+  BFF --> Liga
+  BFF --> Achievement
+
+  Bacaan -->|"publish QuizCompleted"| Queue
+  Queue -->|"consume event"| Achievement
+
+  Auth --> AuthDb
+  Bacaan --> BacaanDb
+  Forum --> ForumDb
+  Liga --> LigaDb
+  Achievement --> AchievementDb
+
+  Auth --> Supabase
+  Bacaan --> Supabase
+  Forum --> Supabase
+  Liga --> Supabase
+  Achievement --> Auth
+
+  BFF --> Monitor
+  Auth --> Monitor
+  Bacaan --> Monitor
+  Forum --> Monitor
+  Liga --> Monitor
+  Achievement --> Monitor
+```
+
+Future container diagram mempertahankan pemisahan domain yang sudah ada, tetapi menambahkan dua elemen penting. Pertama, API Gateway/BFF menjadi entry point backend yang konsisten sehingga frontend tidak perlu memanggil banyak backend secara langsung. Kedua, Event Queue memisahkan `be-bacaan` dan `be-achievement`, sehingga submit quiz tidak bergantung langsung pada availability achievement service.
+
+Dengan perubahan ini, risiko utama dapat dikurangi tanpa menghilangkan struktur microservice sederhana yang sudah dibangun. Availability meningkat karena kegagalan achievement tidak langsung menggagalkan quiz. Security lebih mudah dikontrol karena akses backend masuk melalui satu lapisan yang konsisten. Scalability juga lebih baik karena event berulang seperti quiz completion dapat diproses secara asynchronous.
