@@ -234,3 +234,14 @@ flowchart TB
 Future container diagram mempertahankan pemisahan domain yang sudah ada, tetapi menambahkan dua elemen penting. Pertama, API Gateway/BFF menjadi entry point backend yang konsisten sehingga frontend tidak perlu memanggil banyak backend secara langsung. Kedua, Event Queue memisahkan `be-bacaan` dan `be-achievement`, sehingga submit quiz tidak bergantung langsung pada availability achievement service.
 
 Dengan perubahan ini, risiko utama dapat dikurangi tanpa menghilangkan struktur microservice sederhana yang sudah dibangun. Availability meningkat karena kegagalan achievement tidak langsung menggagalkan quiz. Security lebih mudah dikontrol karena akses backend masuk melalui satu lapisan yang konsisten. Scalability juga lebih baik karena event berulang seperti quiz completion dapat diproses secara asynchronous.
+
+
+## Alvin Christian Halim - Individual
+Code diagram
+![](./image/code-diagram.png)
+
+Component Diagram
+
+![](./image/component.png)
+
+
