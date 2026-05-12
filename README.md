@@ -163,7 +163,7 @@ Future architecture YOMU dibuat berdasarkan risiko yang ditemukan pada risk stor
 
 Perubahan utama yang diusulkan:
 
-- Semua request dari frontend masuk melalui **API Gateway / BFF** agar routing, auth forwarding, CORS, dan backend URL lebih konsisten (Mungkin bisa diselesaikan ehe?)
+- Semua request dari frontend masuk melalui **API Gateway / BFF** agar routing, auth forwarding, CORS, dan backend URL lebih konsisten.
 - Event `QuizCompleted` dari Bacaan ke Achievement dipindah ke **Event Queue** agar submit quiz tidak gagal hanya karena achievement service sedang lambat.
 - Validasi identity tetap memakai Supabase/JWKS, tetapi akses admin dan protected endpoint perlu distandarkan antarservice.
 - Monitoring dan logging ditambahkan sebagai external supporting system agar failure dapat ditemukan lebih cepat.
@@ -254,3 +254,15 @@ flowchart TB
 Future container diagram mempertahankan pemisahan domain yang sudah ada, tetapi menambahkan dua elemen penting. Pertama, API Gateway/BFF menjadi entry point backend yang konsisten sehingga frontend tidak perlu memanggil banyak backend secara langsung. Kedua, Event Queue memisahkan `be-bacaan` dan `be-achievement`, sehingga submit quiz tidak bergantung langsung pada availability achievement service.
 
 Dengan perubahan ini, risiko utama dapat dikurangi tanpa menghilangkan struktur microservice sederhana yang sudah dibangun. Availability meningkat karena kegagalan achievement tidak langsung menggagalkan quiz. Security lebih mudah dikontrol karena akses backend masuk melalui satu lapisan yang konsisten. Scalability juga lebih baik karena event berulang seperti quiz completion dapat diproses secara asynchronous.
+
+### Explanation of Risk Storming and Architecture Modification Justification
+
+Risk storming diterapkan karena arsitektur YOMU melibatkan banyak komponen yang saling bergantung, mulai dari frontend, auth, bacaan, forum, liga, achievement, database, hingga Supabase. Fitur yang terlihat sederhana bagi user, seperti mengerjakan quiz, dapat melewati beberapa service sekaligus. Tanpa risk storming, risiko seperti achievement tidak ter-update, token tidak tervalidasi konsisten, atau service tertentu menjadi bottleneck bisa terlambat terlihat.
+
+Dalam diskusi kelompok, risk storming membantu setiap anggota menilai risiko dari perspektif berbeda. Frontend dapat melihat risiko routing dan API URL, backend melihat risiko komunikasi antarservice dan konsistensi data, sedangkan deployment melihat risiko environment variable, port, database, dan dependency eksternal. Karena itu, analisis risiko menjadi lebih objektif dan tidak hanya bergantung pada asumsi satu orang.
+
+Risk analysis menunjukkan bahwa risiko terbesar YOMU muncul dari integrasi, bukan dari pemisahan domainnya. Service seperti auth, bacaan, forum, liga, dan achievement sudah memiliki batas tanggung jawab yang cukup jelas, tetapi alur user sering melewati lebih dari satu service. Saat jumlah user meningkat, masalah kecil seperti URL backend yang tidak konsisten, validasi token yang tidak seragam, atau service achievement yang lambat dapat langsung memengaruhi pengalaman student dan admin.
+
+Modifikasi arsitektur difokuskan pada perubahan yang memberi dampak besar tetapi tetap realistis. API Gateway/BFF dipilih agar frontend memiliki satu jalur komunikasi yang konsisten ke backend, sehingga CORS, auth forwarding, dan konfigurasi URL lebih mudah dikendalikan. Event Queue dipilih untuk memisahkan proses submit quiz dari update achievement, karena achievement adalah efek lanjutan dari quiz dan tidak seharusnya membuat transaksi utama gagal.
+
+Arsitektur masa depan tetap mempertahankan database per domain karena pemisahan data membantu menjaga ownership dan mengurangi coupling antarservice. Tambahan observability juga penting karena sistem yang sukses membutuhkan kemampuan mendeteksi error, bottleneck, dan service degradation lebih cepat. Dengan demikian, perubahan yang diusulkan bukan redesign total, melainkan penguatan terhadap risiko availability, data integrity, security, dan scalability yang ditemukan melalui risk storming.
