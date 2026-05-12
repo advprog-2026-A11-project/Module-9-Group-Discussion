@@ -128,3 +128,21 @@ Deployment diagram menunjukkan bahwa frontend dan backend tidak berjalan di temp
 | Supabase              | Authentication Database                    | Database auth ditempatkan di Supabase. Ini sejalan dengan penggunaan Supabase sebagai pusat identitas/auth.                                                                        |
 | Supabase              | Liga Database                              | Database liga ditempatkan di Supabase. Ini penting karena `be-liga` bukan hanya memakai Spring Boot, tetapi juga bergantung pada Supabase pada sisi auth/JWT dan penyimpanan data. |
 | AWS EC2 Ubuntu Server | Bacaan, Forum, dan Achievements Database   | Database domain bacaan, forum, dan achievement ditempatkan sebagai PostgreSQL pada node EC2 sesuai diagram.                                                                        |
+
+## Individual Work — Achievement Module
+
+**Nama:** Daffa Rayhan Ananda
+**NPM:** 2306152235
+**Modul:** Liga
+
+### Component Diagram Liga
+
+![Component Diagram Liga](image/component-diagram-liga.png)
+
+Permintaan pertama-tama melewati filter CORS, kemudian lapisan OAuth2/JWT (SecurityConfig). Endpoint publik (/api/clan/list, /api/clan/detail/) melewati otentikasi; semua yang lain memerlukan JWT Supabase yang valid. ClanController mendelegasikan semua logika bisnis ke ClanService, yang berkomunikasi dengan satu ClanRepository yang didukung oleh tiga tabel PostgreSQL.
+
+### Code Diagram Liga
+
+![Code Diagram liga](image/code-diagram-liga.png)
+
+ClanController menyuntikkan antarmuka ClanService. ClanServiceImpl adalah bean @Transactional yang diselesaikan oleh Spring. Entitas Clan menyimpan dua daftar @ElementCollection: List<ClanMember>  yang dipetakan ke clan_members, dan List<String> ID pelamar yang dipetakan ke clan_applicants. ClanMember adalah objek nilai @Embeddable — tidak memiliki identitas sendiri. SecurityConfig berada di luar rantai panggilan tetapi mengamankan controller melalui rantai filter.
